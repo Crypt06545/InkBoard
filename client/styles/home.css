@@ -1,0 +1,100 @@
+/*
+  Import this from src/app/globals.css, right after `@import "tailwindcss";`:
+    @import "../styles/home.css";
+*/
+
+/* ===== Palette: "Monochrome" =====
+   pure neutral surfaces, brand = ink (no brand colour),
+   colour only on sticky notes, pen accent and cursors */
+.home {
+  --hb-bg: #fafafa;
+  --hb-surface: #ffffff;
+  --hb-ink: #0a0a0a;
+  --hb-muted: #6b6b6b;
+  --hb-line: #e5e5e5;
+  --hb-dot: #d4d4d4;
+
+  --hb-brand: #0a0a0a;
+  --hb-brand-ink: #fafafa;
+  --hb-brand-soft: #f0f0f0;
+  --hb-accent: #2f5fd0;
+
+  --hb-deep: #0a0a0a;
+  --hb-deep-ink: #ededed;
+
+  /* paper tones, identical in light and dark */
+  --hb-amber: #f6e7a8;
+  --hb-mint: #d9e9dc;
+  --hb-peach: #f3dccd;
+  --hb-sky: #d9e4f2;
+  --hb-paper-ink: #171717;
+
+  --hb-cur1: #d4452f;
+  --hb-cur2: #2f5fd0;
+
+  /* shadcn tokens follow the home palette inside .home (auth pages, forms) */
+  --background: var(--hb-bg);
+  --foreground: var(--hb-ink);
+  --muted: var(--hb-brand-soft);
+  --muted-foreground: var(--hb-muted);
+  --border: var(--hb-line);
+  --input: var(--hb-line);
+  --ring: var(--hb-muted);
+  --primary: var(--hb-brand);
+  --primary-foreground: var(--hb-brand-ink);
+}
+
+@media (prefers-color-scheme: dark) {
+  .home {
+    --hb-bg: #0a0a0a;
+    --hb-surface: #121212;
+    --hb-ink: #ededed;
+    --hb-muted: #9a9a9a;
+    --hb-line: #262626;
+    --hb-dot: #262626;
+
+    --hb-brand: #fafafa;
+    --hb-brand-ink: #0a0a0a;
+    --hb-brand-soft: #1c1c1c;
+    --hb-accent: #6f96ec;
+
+    --hb-deep: #050505;
+    --hb-deep-ink: #ededed;
+  }
+}
+
+@theme inline {
+  --color-hb-bg: var(--hb-bg);
+  --color-hb-surface: var(--hb-surface);
+  --color-hb-ink: var(--hb-ink);
+  --color-hb-muted: var(--hb-muted);
+  --color-hb-line: var(--hb-line);
+  --color-hb-dot: var(--hb-dot);
+  --color-hb-brand: var(--hb-brand);
+  --color-hb-brand-ink: var(--hb-brand-ink);
+  --color-hb-brand-soft: var(--hb-brand-soft);
+  --color-hb-accent: var(--hb-accent);
+  --color-hb-deep: var(--hb-deep);
+  --color-hb-deep-ink: var(--hb-deep-ink);
+  --color-hb-amber: var(--hb-amber);
+  --color-hb-mint: var(--hb-mint);
+  --color-hb-peach: var(--hb-peach);
+  --color-hb-sky: var(--hb-sky);
+  --color-hb-paper-ink: var(--hb-paper-ink);
+  --color-hb-cur1: var(--hb-cur1);
+  --color-hb-cur2: var(--hb-cur2);
+}
+
+html {
+  scroll-behavior: smooth;
+}
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+}
+
+/* no colour wash behind the hero */
+.home .hb-glow {
+  background: none;
+}
