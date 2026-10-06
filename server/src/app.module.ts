@@ -9,8 +9,9 @@ import { AuthModule } from './auth/auth.module.js';
 import { QueueModule } from './queue/queue.module.js';
 
 import { CloudinaryModule } from './common/cloudinary/cloudinary.module.js';
-
 import { BoardsModule } from './boards/boards.module.js';
+import { AiModule } from './ai/ai.module.js';
+
 // app.module.ts
 
 @Module({
@@ -20,8 +21,8 @@ import { BoardsModule } from './boards/boards.module.js';
     AuthModule,
     QueueModule,
     CloudinaryModule,
-
     BoardsModule,
+    AiModule,
   ],
   controllers: [AppController],
   providers: [AppService],

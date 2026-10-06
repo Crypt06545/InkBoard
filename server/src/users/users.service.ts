@@ -313,4 +313,17 @@ export class UsersService {
       },
     );
   }
+
+  async search(q: string) {
+    if (!q || q.trim().length < 2) return [];
+
+    const escaped = q.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const regex = new RegExp(escaped, 'i');
+
+    return this.userModel
+      .find({ $or: [{ name: regex }, { email: regex }] })
+      .select('name email avatar')
+      .limit(10)
+      .lean();
+  }
 }

@@ -36,6 +36,7 @@ const REFRESH_COOKIE_NAME = 'refreshToken';
 const REFRESH_COOKIE_MAX_AGE = REFRESH_TOKEN_TTL_MS;
 const TRUSTED_DEVICE_COOKIE_NAME = 'trustedDevice';
 const TRUSTED_DEVICE_MAX_AGE = TRUSTED_DEVICE_TTL_MS;
+const isProd = process.env.NODE_ENV === 'production';
 
 @ApiTags('auth')
 @Controller('auth')
@@ -303,7 +304,7 @@ export class AuthController {
     res.cookie(REFRESH_COOKIE_NAME, refreshToken, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict',
+      sameSite: isProd ? 'strict' : 'lax',
       maxAge: REFRESH_COOKIE_MAX_AGE,
     });
   }
@@ -312,7 +313,7 @@ export class AuthController {
     res.cookie(TRUSTED_DEVICE_COOKIE_NAME, token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict',
+      sameSite: isProd ? 'strict' : 'lax',
       maxAge: TRUSTED_DEVICE_MAX_AGE,
     });
   }

@@ -10,7 +10,7 @@ export const createMulterConfig = (maxFiles = 1) => ({
   storage: memoryStorage(),
 
   limits: {
-    fileSize: 5 * 1024 * 1024, // প্রতিটি file সর্বোচ্চ 2 MB
+    fileSize: 5 * 1024 * 1024,
     files: maxFiles,
   },
 
