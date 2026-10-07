@@ -30,7 +30,8 @@ import type {
   Point,
   ResizeHandle,
 } from "./types";
-import { buildTransform, getColorTarget, isEditableType } from "./utils";
+import { buildTransform, isEditableType } from "./utils";
+import { applyStyle, getStyleSpec, type StyleKind } from "./styleSpec";
 
 type Args = {
   boardId: string;
@@ -177,6 +178,23 @@ export const useBoardCanvas = ({
     });
   }, []);
 
+  const liveEdit = useCallback(
+    (element: BoardElement, text: string) => {
+      // local instant
+      setLocalElements((current) =>
+        current.map((item) =>
+          item.id === element.id
+            ? { ...item, data: { ...item.data, text } }
+            : item,
+        ),
+      );
+
+      // socket live
+      emitElementLive({ ...element, data: { ...element.data, text } });
+    },
+    [emitElementLive],
+  );
+
   const flush = useCallback(() => {
     if (rafRef.current !== null) {
       cancelAnimationFrame(rafRef.current);
@@ -220,7 +238,6 @@ export const useBoardCanvas = ({
   /* ======================================================
      REST Persistence
   ====================================================== */
-
   const persistCreate = useCallback(
     async (tempId: string, el: NewElement) => {
       try {
@@ -242,12 +259,37 @@ export const useBoardCanvas = ({
           socketId,
         );
 
-        // boardApi.createElement already normalized → saved.id exists
-        setLocalElements((current) =>
-          current.map((item) =>
+        // create cholar shomoy local e ja change hoyeche (typing/drag/style)
+        const current = localElementsRef.current.find((it) => it.id === tempId);
+
+        setLocalElements((currentList) =>
+          currentList.map((item) =>
             item.id === tempId ? { ...item, id: saved.id } : item,
           ),
         );
+
+        // jodi create er modhhe user kichu change kore thake, notun id diye update pathao
+        if (current) {
+          const localData = { ...current.data };
+          const sentData = {
+            ...(el.style ?? {}),
+            ...((el.content as object) ?? {}),
+            x: el.x,
+            y: el.y,
+            w: el.w,
+            h: el.h,
+          };
+          if (JSON.stringify(localData) !== JSON.stringify(sentData)) {
+            boardApi
+              .updateElement(
+                boardIdRef.current,
+                saved.id,
+                { data: localData },
+                socketId,
+              )
+              .catch(() => {});
+          }
+        }
       } catch {
         toast.error("Could not save the element. Removing it.");
         setLocalElements((current) =>
@@ -351,6 +393,8 @@ export const useBoardCanvas = ({
         ),
       );
 
+      if (element.id.startsWith("local-")) return;
+
       const socketId = getSocketId() ?? undefined;
       boardApi
         .updateElement(
@@ -366,7 +410,6 @@ export const useBoardCanvas = ({
 
   const onAutoSize = useCallback(
     (id: string, height: number) => {
-      // Local update
       setLocalElements((current) =>
         current.map((item) => {
           if (item.id !== id) return item;
@@ -375,6 +418,9 @@ export const useBoardCanvas = ({
           return { ...item, data: { ...item.data, h: height } };
         }),
       );
+
+      // local- hole backend e save kora jabe na
+      if (id.startsWith("local-")) return;
 
       const el = localElementsRef.current.find((item) => item.id === id);
       if (el) {
@@ -411,7 +457,7 @@ export const useBoardCanvas = ({
             y: pos.y,
             w: Math.round(img.width * ratio),
             h: Math.round(img.height * ratio),
-            content: { src: url }, // backend cleanup expects data.src
+            content: { src: url },
           });
 
           setSelectedIds([id]);
@@ -1193,6 +1239,7 @@ export const useBoardCanvas = ({
       onPointerEnter: onElementPointerEnter,
       onDoubleClick: onElementDoubleClick,
       onCommitEdit: commitEdit,
+      onLiveEdit: liveEdit,
       onAutoSize,
       onResizeStart,
       onResizeMove,
@@ -1208,6 +1255,7 @@ export const useBoardCanvas = ({
       onElementPointerEnter,
       onElementDoubleClick,
       commitEdit,
+      liveEdit,
       onAutoSize,
       onResizeStart,
       onResizeMove,
@@ -1232,34 +1280,43 @@ export const useBoardCanvas = ({
     [localElements, selectedSet],
   );
 
-  const colorTarget = useMemo(() => {
+  /* properties panel er spec: selected er moddhe prothom je element e option ache */
+  const styleSpec = useMemo(() => {
     for (const element of selectedElements) {
-      const target = getColorTarget(element);
-      if (target) return target;
+      const spec = getStyleSpec(element);
+      if (spec) return spec;
     }
     return null;
   }, [selectedElements]);
 
-  const changeSelectedColor = useCallback(
-    (color: string) => {
+  /* stroke / fill / width / style / font: selected shob element e apply */
+  const changeSelectedStyle = useCallback(
+    (kind: StyleKind, value: string | number) => {
       const ids = new Set(selectedIdsRef.current);
+      const patches = new Map<string, Record<string, unknown>>();
 
-      setLocalElements((current) =>
-        current.map((element) => {
-          if (!ids.has(element.id)) return element;
+      localElementsRef.current.forEach((element) => {
+        if (!ids.has(element.id)) return;
+        const patch = applyStyle(element, kind, value);
+        if (patch) patches.set(element.id, patch);
+      });
 
-          const target = getColorTarget(element);
-          if (!target) return element;
+      if (patches.size === 0) return;
 
-          const updated: BoardElement = {
-            ...element,
-            data: { ...element.data, [target.property]: color },
-          };
+      const next = localElementsRef.current.map((element) => {
+        const patch = patches.get(element.id);
+        return patch
+          ? { ...element, data: { ...element.data, ...patch } }
+          : element;
+      });
 
-          persistUpdate(element.id, { data: { ...updated.data } });
-          return updated;
-        }),
-      );
+      setLocalElements(next);
+
+      next.forEach((element) => {
+        if (patches.has(element.id)) {
+          persistUpdate(element.id, { data: { ...element.data } });
+        }
+      });
     },
     [persistUpdate],
   );
@@ -1278,8 +1335,8 @@ export const useBoardCanvas = ({
     singleId,
     editingId,
     hasSelection: selectedIds.length > 0,
-    colorTarget,
-    changeSelectedColor,
+    styleSpec,
+    changeSelectedStyle,
     insertImage,
     handlers,
     canvasHandlers: {

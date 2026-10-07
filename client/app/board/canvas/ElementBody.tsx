@@ -24,6 +24,14 @@ type ElementBodyProps = {
 
 const BULLET = "• ";
 
+/* solid / dashed / dotted -> strokeDasharray */
+const dashFor = (style: string, w: number): string | undefined =>
+  style === "dashed"
+    ? `${w * 3} ${w * 2}`
+    : style === "dotted"
+      ? `0.1 ${w * 2.2}`
+      : undefined;
+
 const editorStyle = (
   fontSize: number,
   color: string,
@@ -55,15 +63,18 @@ const TextBlock = ({
 
   const data = element.data ?? {};
 
-  const hand = element.type === "handwriting";
+  const isHandType = element.type === "handwriting";
   const bullet = element.type === "bullet";
 
-  const fontSize = getNumber(data.fontSize, hand ? 30 : bullet ? 20 : 22);
+  /* font ekhon data.font theke ashe (hand | sans) */
+  const hand = getString(data.font, isHandType ? "hand" : "sans") === "hand";
+
+  const fontSize = getNumber(data.fontSize, isHandType ? 30 : bullet ? 20 : 22);
   const color = getString(data.color, C.ink);
   const content = getContentText(data);
 
   const lines = content.split("\n").filter((line) => line.trim() !== "");
-  const placeholder = hand ? "Handwriting" : bullet ? "Item" : "Text";
+  const placeholder = isHandType ? "Handwriting" : bullet ? "Item" : "Text";
 
   const base: CSSProperties = {
     color,
@@ -125,6 +136,7 @@ const ElementBody = ({
   const stroke = getString(data.stroke, C.ink);
   const strokeWidth = getNumber(data.strokeWidth, 2.4);
   const content = getContentText(data);
+  const dash = dashFor(getString(data.strokeStyle, "solid"), strokeWidth);
 
   switch (element.type) {
     case "text":
@@ -144,6 +156,7 @@ const ElementBody = ({
     case "sticky": {
       const fontSize = getNumber(data.fontSize, 24);
       const color = getString(data.color, C.paperInk);
+      const hand = getString(data.font, "hand") === "hand";
 
       return (
         <>
@@ -174,6 +187,9 @@ const ElementBody = ({
             height={height}
             rx={6}
             fill={getString(data.background, C.amber)}
+            stroke={getString(data.borderColor, "transparent")}
+            strokeWidth={getNumber(data.borderWidth, 0)}
+            strokeLinejoin="round"
           />
 
           <foreignObject
@@ -186,7 +202,7 @@ const ElementBody = ({
               <EditorTextarea
                 defaultValue={content}
                 placeholder="Write…"
-                style={editorStyle(fontSize, color, true)}
+                style={editorStyle(fontSize, color, hand)}
                 onCommit={(value) => onCommitEdit(element, value)}
                 onLiveChange={(value) => onLiveEdit(element, value)}
                 onFit={(contentHeight) =>
@@ -200,10 +216,10 @@ const ElementBody = ({
               <div
                 style={{
                   color,
-                  fontFamily: HAND_FONT,
-                  fontWeight: 600,
+                  fontFamily: hand ? HAND_FONT : undefined,
+                  fontWeight: hand ? 600 : 500,
                   fontSize,
-                  lineHeight: 1.1,
+                  lineHeight: hand ? 1.1 : 1.35,
                   whiteSpace: "pre-wrap",
                   wordBreak: "break-word",
                   userSelect: "none",
@@ -230,6 +246,8 @@ const ElementBody = ({
             fill={fill}
             stroke={stroke}
             strokeWidth={strokeWidth}
+            strokeDasharray={dash}
+            strokeLinecap="round"
           />
         );
       }
@@ -242,6 +260,8 @@ const ElementBody = ({
             stroke={stroke}
             strokeWidth={strokeWidth}
             strokeLinejoin="round"
+            strokeDasharray={dash}
+            strokeLinecap="round"
           />
         );
       }
@@ -257,6 +277,8 @@ const ElementBody = ({
           stroke={stroke}
           strokeWidth={strokeWidth}
           strokeLinejoin="round"
+          strokeDasharray={dash}
+          strokeLinecap="round"
         />
       );
     }
@@ -272,9 +294,11 @@ const ElementBody = ({
       const y2 = flipY ? 0 : height;
 
       const lineWidth = getNumber(data.strokeWidth, 3);
+      const lineDash = dashFor(getString(data.strokeStyle, "solid"), lineWidth);
 
       return (
         <>
+          {/* invisible hit area */}
           <line
             x1={x1}
             y1={y1}
@@ -292,6 +316,7 @@ const ElementBody = ({
             stroke={stroke}
             strokeWidth={lineWidth}
             strokeLinecap="round"
+            strokeDasharray={lineDash}
           />
           {element.type === "arrow" && (
             <polyline
@@ -308,17 +333,23 @@ const ElementBody = ({
     }
 
     case "draw":
-    case "pen":
+    case "pen": {
+      const penWidth = getNumber(data.strokeWidth, 4);
       return (
         <path
           d={toPath(getPoints(data))}
           fill="none"
           stroke={stroke}
-          strokeWidth={getNumber(data.strokeWidth, 4)}
+          strokeWidth={penWidth}
           strokeLinecap="round"
           strokeLinejoin="round"
+          strokeDasharray={dashFor(
+            getString(data.strokeStyle, "solid"),
+            penWidth,
+          )}
         />
       );
+    }
 
     case "emoji":
       return (

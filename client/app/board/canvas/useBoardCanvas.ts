@@ -30,7 +30,8 @@ import type {
   Point,
   ResizeHandle,
 } from "./types";
-import { buildTransform, getColorTarget, isEditableType } from "./utils";
+import { buildTransform, isEditableType } from "./utils";
+import { applyStyle, getStyleSpec, type StyleKind } from "./styleSpec";
 
 type Args = {
   boardId: string;
@@ -89,11 +90,21 @@ type PanState = {
   originalOffsetY: number;
 };
 
-/* ---- small helpers for the flat data shape ---- */
+/* ---- flat data shape helpers ---- */
 const getX = (el: BoardElement) => el.data?.x ?? 0;
 const getY = (el: BoardElement) => el.data?.y ?? 0;
 const getW = (el: BoardElement) => el.data?.w ?? DEFAULT_WIDTH;
 const getH = (el: BoardElement) => el.data?.h ?? DEFAULT_HEIGHT;
+
+/* ---- history helpers ---- */
+const cloneElement = (el: BoardElement): BoardElement => ({
+  ...el,
+  data: { ...el.data },
+});
+const cloneList = (list: BoardElement[]): BoardElement[] =>
+  list.map(cloneElement);
+
+const MAX_HISTORY = 80;
 
 export const useBoardCanvas = ({
   boardId,
@@ -162,6 +173,36 @@ export const useBoardCanvas = ({
     if (activeTool !== "select") setSelectedIds([]);
   }, [activeTool]);
 
+  /* ---------- undo / redo system ---------- */
+  const historyRef = useRef<BoardElement[][]>([]);
+  const futureRef = useRef<BoardElement[][]>([]);
+  const gestureSnapshotRef = useRef<BoardElement[] | null>(null);
+  const [, setHistoryTick] = useState(0);
+  const bump = useCallback(() => setHistoryTick((t) => t + 1), []);
+
+  /** Call before any state mutation that should be undoable. */
+  const beginHistory = useCallback(() => {
+    if (!gestureSnapshotRef.current) {
+      gestureSnapshotRef.current = cloneList(localElementsRef.current);
+    }
+  }, []);
+
+  /** Call after the mutation; pushes the pre-mutation snapshot. */
+  const commitHistory = useCallback(() => {
+    const snap = gestureSnapshotRef.current;
+    gestureSnapshotRef.current = null;
+    if (!snap) return;
+    historyRef.current.push(snap);
+    if (historyRef.current.length > MAX_HISTORY) historyRef.current.shift();
+    futureRef.current = [];
+    bump();
+  }, [bump]);
+
+  /** Call when a gesture is cancelled (no mutation happened). */
+  const cancelHistory = useCallback(() => {
+    gestureSnapshotRef.current = null;
+  }, []);
+
   /* ---------- rAF throttle ---------- */
   const rafRef = useRef<number | null>(null);
   const pendingRef = useRef<(() => void) | null>(null);
@@ -179,7 +220,6 @@ export const useBoardCanvas = ({
 
   const liveEdit = useCallback(
     (element: BoardElement, text: string) => {
-      // local instant
       setLocalElements((current) =>
         current.map((item) =>
           item.id === element.id
@@ -187,8 +227,6 @@ export const useBoardCanvas = ({
             : item,
         ),
       );
-
-      // socket live (already wired via emitElementLive)
       emitElementLive({ ...element, data: { ...element.data, text } });
     },
     [emitElementLive],
@@ -241,7 +279,6 @@ export const useBoardCanvas = ({
     async (tempId: string, el: NewElement) => {
       try {
         const socketId = getSocketId() ?? undefined;
-
         const saved = await boardApi.createElement(
           boardIdRef.current,
           {
@@ -258,7 +295,6 @@ export const useBoardCanvas = ({
           socketId,
         );
 
-        // ⚠️ Local state এ যা যা change হয়েছে (typing/drag) সেটা ধরে রাখো
         const current = localElementsRef.current.find((it) => it.id === tempId);
 
         setLocalElements((currentList) =>
@@ -267,8 +303,6 @@ export const useBoardCanvas = ({
           ),
         );
 
-        // ⚠️ যদি create এর মধ্যে user text/position change করে থাকে,
-        //    নতুন id দিয়ে backend এ update পাঠাও
         if (current) {
           const localData = { ...current.data };
           const sentData = {
@@ -316,7 +350,7 @@ export const useBoardCanvas = ({
   );
 
   const persistDelete = useCallback(
-    (elementId: string, snapshot: BoardElement) => {
+    (elementId: string, snapshotEl: BoardElement) => {
       if (elementId.startsWith("local-")) return;
 
       const socketId = getSocketId() ?? undefined;
@@ -324,16 +358,70 @@ export const useBoardCanvas = ({
         .deleteElement(boardIdRef.current, elementId, socketId)
         .catch(() => {
           toast.error("Could not delete the element.");
-          setLocalElements((current) => [...current, snapshot]);
+          setLocalElements((current) => [...current, snapshotEl]);
         });
     },
     [getSocketId],
   );
 
+  /* ---------- persist delta (for undo/redo) ---------- */
+  const persistDelta = useCallback(
+    (from: BoardElement[], to: BoardElement[]) => {
+      const fromMap = new Map(from.map((el) => [el.id, el]));
+      const toMap = new Map(to.map((el) => [el.id, el]));
+
+      // elements in `from` but not `to` → deleted on server
+      // (covers: undo of a create; redo of a delete — but delete undo will
+      //  leave the element local-only; refresh loses it — acceptable)
+      for (const el of from) {
+        if (!toMap.has(el.id) && !el.id.startsWith("local-")) {
+          persistDelete(el.id, el);
+        }
+      }
+
+      // elements in both → compare data
+      for (const el of to) {
+        const prev = fromMap.get(el.id);
+        if (!prev) continue;
+        if (JSON.stringify(prev.data) !== JSON.stringify(el.data)) {
+          persistUpdate(el.id, { data: { ...el.data } });
+        }
+      }
+    },
+    [persistDelete, persistUpdate],
+  );
+
+  /* ---------- undo / redo ---------- */
+  const undo = useCallback(() => {
+    const prev = historyRef.current.pop();
+    if (!prev) return;
+    const current = cloneList(localElementsRef.current);
+    futureRef.current.push(current);
+    setLocalElements(prev);
+    setSelectedIds([]);
+    setEditingId(null);
+    persistDelta(current, prev);
+    bump();
+  }, [persistDelta, bump]);
+
+  const redo = useCallback(() => {
+    const next = futureRef.current.pop();
+    if (!next) return;
+    const current = cloneList(localElementsRef.current);
+    historyRef.current.push(current);
+    setLocalElements(next);
+    setSelectedIds([]);
+    setEditingId(null);
+    persistDelta(current, next);
+    bump();
+  }, [persistDelta, bump]);
+
   /* ---------- element helpers ---------- */
   const addElement = useCallback(
     (el: NewElement): string => {
       const id = `local-${crypto.randomUUID()}`;
+
+      beginHistory();
 
       setLocalElements((current) => {
         const z =
@@ -356,22 +444,30 @@ export const useBoardCanvas = ({
         return [...current, created];
       });
 
+      commitHistory();
+
       void persistCreate(id, el);
       return id;
     },
-    [persistCreate],
+    [persistCreate, beginHistory, commitHistory],
   );
 
   const removeElement = useCallback(
     (id: string) => {
-      const snapshot = localElementsRef.current.find((item) => item.id === id);
+      const snapshotEl = localElementsRef.current.find(
+        (item) => item.id === id,
+      );
+
+      beginHistory();
 
       setLocalElements((current) => current.filter((item) => item.id !== id));
       setSelectedIds((current) => current.filter((item) => item !== id));
 
-      if (snapshot) persistDelete(id, snapshot);
+      commitHistory();
+
+      if (snapshotEl) persistDelete(id, snapshotEl);
     },
-    [persistDelete],
+    [persistDelete, beginHistory, commitHistory],
   );
 
   const updateElement = useCallback(
@@ -385,7 +481,8 @@ export const useBoardCanvas = ({
 
   const commitEdit = useCallback(
     (element: BoardElement, text: string) => {
-      // Local state instant update
+      beginHistory();
+
       setLocalElements((current) =>
         current.map((item) =>
           item.id === element.id
@@ -393,6 +490,8 @@ export const useBoardCanvas = ({
             : item,
         ),
       );
+
+      commitHistory();
 
       if (element.id.startsWith("local-")) return;
 
@@ -406,7 +505,7 @@ export const useBoardCanvas = ({
         )
         .catch(() => toast.error("Could not save your change."));
     },
-    [boardId, getSocketId],
+    [boardId, getSocketId, beginHistory, commitHistory],
   );
 
   const onAutoSize = useCallback(
@@ -420,7 +519,6 @@ export const useBoardCanvas = ({
         }),
       );
 
-      // ⚠️ local- হলে backend এ save করা যাবে না
       if (id.startsWith("local-")) return;
 
       const el = localElementsRef.current.find((item) => item.id === id);
@@ -458,7 +556,7 @@ export const useBoardCanvas = ({
             y: pos.y,
             w: Math.round(img.width * ratio),
             h: Math.round(img.height * ratio),
-            content: { src: url }, // backend cleanup expects data.src
+            content: { src: url },
           });
 
           setSelectedIds([id]);
@@ -479,6 +577,24 @@ export const useBoardCanvas = ({
       const target = event.target as HTMLElement;
       if (target.tagName === "TEXTAREA" || target.tagName === "INPUT") return;
 
+      const mod = event.metaKey || event.ctrlKey;
+
+      // Undo
+      if (mod && !event.shiftKey && event.key.toLowerCase() === "z") {
+        event.preventDefault();
+        undo();
+        return;
+      }
+      // Redo: Cmd+Shift+Z or Cmd+Y
+      if (
+        (mod && event.shiftKey && event.key.toLowerCase() === "z") ||
+        (mod && event.key.toLowerCase() === "y")
+      ) {
+        event.preventDefault();
+        redo();
+        return;
+      }
+
       if (event.key === "Escape") {
         setSelectedIds([]);
         setEditingId(null);
@@ -489,24 +605,27 @@ export const useBoardCanvas = ({
         (event.key === "Delete" || event.key === "Backspace") &&
         selectedIds.length > 0
       ) {
+        event.preventDefault();
         selectedIds.forEach((id) => {
-          const snapshot = localElementsRef.current.find(
+          const snapshotEl = localElementsRef.current.find(
             (item) => item.id === id,
           );
-          if (snapshot) persistDelete(id, snapshot);
+          if (snapshotEl) persistDelete(id, snapshotEl);
         });
 
+        beginHistory();
         const ids = new Set(selectedIds);
         setLocalElements((current) =>
           current.filter((item) => !ids.has(item.id)),
         );
         setSelectedIds([]);
+        commitHistory();
       }
     };
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [selectedIds, persistDelete]);
+  }, [selectedIds, persistDelete, undo, redo, beginHistory, commitHistory]);
 
   /* ---------- canvas pointer ---------- */
   const onCanvasPointerDown = useCallback(
@@ -909,9 +1028,10 @@ export const useBoardCanvas = ({
         moved: false,
       };
 
+      beginHistory();
       event.currentTarget.setPointerCapture(event.pointerId);
     },
-    [beginGesture, getPointerPosition, removeElement],
+    [beginGesture, getPointerPosition, removeElement, beginHistory],
   );
 
   const onElementPointerMove = useCallback(
@@ -981,6 +1101,8 @@ export const useBoardCanvas = ({
         }),
       );
 
+      commitHistory();
+
       drag.items.forEach((item) => {
         const el = localElementsRef.current.find((e) => e.id === item.id);
         if (!el) return;
@@ -993,8 +1115,10 @@ export const useBoardCanvas = ({
           },
         });
       });
+    } else {
+      cancelHistory();
     }
-  }, [flush, persistUpdate]);
+  }, [flush, persistUpdate, commitHistory, cancelHistory]);
 
   const onElementPointerEnter = useCallback(
     (event: ReactPointerEvent<SVGGElement>, element: BoardElement) => {
@@ -1021,6 +1145,7 @@ export const useBoardCanvas = ({
     ) => {
       event.stopPropagation();
       beginGesture();
+      beginHistory();
 
       const pointer = getPointerPosition(event.clientX, event.clientY);
 
@@ -1038,7 +1163,7 @@ export const useBoardCanvas = ({
 
       event.currentTarget.setPointerCapture(event.pointerId);
     },
-    [beginGesture, getPointerPosition],
+    [beginGesture, getPointerPosition, beginHistory],
   );
 
   const onResizeMove = useCallback(
@@ -1120,16 +1245,18 @@ export const useBoardCanvas = ({
         (e) => e.id === resize.elementId,
       );
       if (el) {
+        commitHistory();
         persistUpdate(resize.elementId, { data: { ...el.data } });
       }
     }
-  }, [flush, persistUpdate]);
+  }, [flush, persistUpdate, commitHistory]);
 
   /* ---------- rotate ---------- */
   const onRotateStart = useCallback(
     (event: ReactPointerEvent<SVGCircleElement>, element: BoardElement) => {
       event.stopPropagation();
       beginGesture();
+      beginHistory();
 
       const width = getW(element);
       const height = getH(element);
@@ -1149,7 +1276,7 @@ export const useBoardCanvas = ({
 
       event.currentTarget.setPointerCapture(event.pointerId);
     },
-    [beginGesture, getPointerPosition],
+    [beginGesture, getPointerPosition, beginHistory],
   );
 
   const onRotateMove = useCallback(
@@ -1186,10 +1313,11 @@ export const useBoardCanvas = ({
         (e) => e.id === rotate.elementId,
       );
       if (el) {
+        commitHistory();
         persistUpdate(rotate.elementId, { data: { ...el.data } });
       }
     }
-  }, [flush, persistUpdate]);
+  }, [flush, persistUpdate, commitHistory]);
 
   /* ---------- socket event merge ---------- */
   const applyRemoteCreate = useCallback((element: BoardElement) => {
@@ -1281,36 +1409,48 @@ export const useBoardCanvas = ({
     [localElements, selectedSet],
   );
 
-  const colorTarget = useMemo(() => {
+  const styleSpec = useMemo(() => {
     for (const element of selectedElements) {
-      const target = getColorTarget(element);
-      if (target) return target;
+      const spec = getStyleSpec(element);
+      if (spec) return spec;
     }
     return null;
   }, [selectedElements]);
 
-  const changeSelectedColor = useCallback(
-    (color: string) => {
+  /* ---------- style change (with history) ---------- */
+  const changeSelectedStyle = useCallback(
+    (kind: StyleKind, value: string | number) => {
       const ids = new Set(selectedIdsRef.current);
+      const patches = new Map<string, Record<string, unknown>>();
 
-      setLocalElements((current) =>
-        current.map((element) => {
-          if (!ids.has(element.id)) return element;
+      localElementsRef.current.forEach((element) => {
+        if (!ids.has(element.id)) return;
+        const patch = applyStyle(element, kind, value);
+        if (patch) patches.set(element.id, patch);
+      });
 
-          const target = getColorTarget(element);
-          if (!target) return element;
+      if (patches.size === 0) return;
 
-          const updated: BoardElement = {
-            ...element,
-            data: { ...element.data, [target.property]: color },
-          };
+      beginHistory();
 
-          persistUpdate(element.id, { data: { ...updated.data } });
-          return updated;
-        }),
-      );
+      const next = localElementsRef.current.map((element) => {
+        const patch = patches.get(element.id);
+        return patch
+          ? { ...element, data: { ...element.data, ...patch } }
+          : element;
+      });
+
+      setLocalElements(next);
+
+      commitHistory();
+
+      next.forEach((element) => {
+        if (patches.has(element.id)) {
+          persistUpdate(element.id, { data: { ...element.data } });
+        }
+      });
     },
-    [persistUpdate],
+    [persistUpdate, beginHistory, commitHistory],
   );
 
   return {
@@ -1327,8 +1467,8 @@ export const useBoardCanvas = ({
     singleId,
     editingId,
     hasSelection: selectedIds.length > 0,
-    colorTarget,
-    changeSelectedColor,
+    styleSpec,
+    changeSelectedStyle,
     insertImage,
     handlers,
     canvasHandlers: {
@@ -1342,5 +1482,10 @@ export const useBoardCanvas = ({
       applyRemoteDelete,
       applyRemoteLive,
     },
+    /* undo / redo */
+    undo,
+    redo,
+    canUndo: historyRef.current.length > 0,
+    canRedo: futureRef.current.length > 0,
   };
 };
