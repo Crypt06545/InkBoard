@@ -181,7 +181,10 @@ export class BoardsService {
       .findByIdAndUpdate(
         boardId,
         { $set: update },
-        { new: true, projection: { elements: 0, collaborators: 0 } },
+        {
+          returnDocument: 'after',
+          projection: { elements: 0, collaborators: 0 },
+        },
       )
       .lean();
 
