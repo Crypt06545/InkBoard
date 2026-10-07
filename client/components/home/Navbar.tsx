@@ -28,21 +28,8 @@ const Navbar = () => {
     return () => window.removeEventListener("scroll", onScroll);
   }, []);
 
-  /* entrance + scroll progress bar */
+  /* scroll progress bar */
   useMotion(root, () => {
-    gsap.from(root.current, {
-      yPercent: -100,
-      duration: 0.7,
-      ease: "power3.out",
-    });
-    gsap.from(".nav-item", {
-      y: -12,
-      opacity: 0,
-      duration: 0.5,
-      stagger: 0.07,
-      delay: 0.25,
-      ease: "power2.out",
-    });
     gsap.fromTo(
       progress.current,
       { scaleX: 0 },
